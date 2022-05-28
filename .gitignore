@@ -1,4 +1,6 @@
-config.json
+config.json*
+main.pyw
 cache.json
 lint.bat
 console.log
+*.pyc
