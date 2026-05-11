@@ -77,7 +77,7 @@ func main() {
 			server = api.NewServer(shutdownCtx, fmt.Sprintf("%s:%d", cfg.Web.BindAddress, cfg.Web.BindPort), web.BuildOutput, devMode, cfg.Web.AllowedNetworks, cfg.Web.TrustedProxies)
 			configController.RegisterRoutes(server)
 			server.RegisterCustomRoute(logger.SseHandler, http.MethodGet, "logs")
-			go func() {
+			go func(server *api.Server) {
 				if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					if !disableWebUiLaunch {
 						if errno, ok := errors.AsType[syscall.Errno](err); ok {
@@ -91,7 +91,7 @@ func main() {
 					logger.Error(err, "Failed to run HTTP server")
 					fatalShutdown()
 				}
-			}()
+			}(server)
 		}
 		discordService := discord.NewService(cfg.Discord.ClientId, cfg.Discord.IpcPipeNumber, cfg.Discord.RateLimit, cfg.Discord.IpcTimeoutSeconds)
 		var plexServices []*plex.Service
