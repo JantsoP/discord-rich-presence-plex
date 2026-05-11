@@ -355,6 +355,8 @@ func (s *Service) getUploadedImageUrl(ctx context.Context, thumb string, sourceU
 		return ""
 	}
 	cacheKey := fmt.Sprintf("%s:%t:%d", thumb, s.imagesConfig.FitInSquare, s.imagesConfig.MaxSize)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.imagesConfig.UploadTimeoutSeconds)*time.Second)
+	defer cancel()
 	for attempt := 1; attempt <= maxUploadAttempts; attempt++ {
 		if cached := s.cacheService.Get(cacheKey); cached != "" {
 			return cached
