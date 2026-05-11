@@ -33,15 +33,15 @@ type Service struct {
 	stopTimeout    time.Duration
 	idleTimeout    time.Duration
 
-	lastState        string
+	stateMu          sync.Mutex
+	state            string
 	stateChangedAtMs int64
 	stopTimer        *time.Timer
 
-	mu       sync.Mutex
-	running  bool
-	stopping bool
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	activityCh chan *plex.Activity
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 func NewService(
@@ -67,43 +67,75 @@ func NewService(
 func (s *Service) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.running || s.stopping {
+	if s.cancel != nil {
 		return
 	}
-	s.running = true
+	s.activityCh = make(chan *plex.Activity, 1)
 	for _, plexService := range s.plexServices {
 		plexService.Start(s.plexCallback)
 	}
+	var ctx context.Context
+	ctx, s.cancel = context.WithCancel(context.Background())
+	s.wg.Go(func() {
+		var handlerWg sync.WaitGroup
+		var handlerCtx context.Context
+		var cancelHandler context.CancelFunc
+		for {
+			select {
+			case <-ctx.Done():
+				handlerWg.Wait()
+				return
+			case activity, open := <-s.activityCh:
+				if !open {
+					return
+				}
+				if cancelHandler != nil {
+					cancelHandler()
+					handlerWg.Wait()
+					if ctx.Err() != nil {
+						return
+					}
+				}
+				select {
+				case newActivity, open := <-s.activityCh:
+					if !open {
+						return
+					}
+					activity = newActivity
+				default:
+				}
+				handlerWg.Add(1)
+				handlerCtx, cancelHandler = context.WithCancel(ctx)
+				go func(handlerCtx context.Context, cancelHandler context.CancelFunc) {
+					s.handlePlexActivity(handlerCtx, activity)
+					cancelHandler()
+					handlerWg.Done()
+				}(handlerCtx, cancelHandler)
+			}
+		}
+	})
 }
 
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running {
-		return
-	}
-	s.running = false
-	s.stopping = true
-	// Unlock mu because plexService.Stop() will wait for plexCallback, which needs to acquire mu
-	s.mu.Unlock()
-	for _, plexService := range s.plexServices {
-		plexService.Stop()
-	}
-	s.mu.Lock()
 	if s.cancel == nil {
 		return
 	}
 	s.cancel()
-	// Unlock mu before waiting for handlePlexActivity (wg), which needs to acquire mu
-	s.mu.Unlock()
+	s.cancel = nil
+	for _, plexService := range s.plexServices {
+		plexService.Stop()
+	}
+	close(s.activityCh)
 	s.wg.Wait()
-	s.mu.Lock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	s.stopActivity()
-	s.stopping = false
 }
 
 func (s *Service) stopActivity() {
-	s.lastState = ""
+	s.state = ""
 	s.clearStopTimer()
 	s.discordService.Disconnect()
 }
@@ -113,11 +145,8 @@ func (s *Service) setStopTimer(duration time.Duration) {
 		return
 	}
 	s.stopTimer = time.AfterFunc(duration, func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if !s.running {
-			return
-		}
+		s.stateMu.Lock()
+		defer s.stateMu.Unlock()
 		s.stopActivity()
 	})
 }
@@ -131,84 +160,66 @@ func (s *Service) clearStopTimer() {
 }
 
 func (s *Service) plexCallback(activity *plex.Activity) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.running {
-		return
+	// Drain any stale pending activity
+	select {
+	case <-s.activityCh:
+	default:
 	}
-	if s.cancel != nil {
-		s.cancel()
-		// Unlock mu before waiting for handlePlexActivity (wg), which needs to acquire mu
-		s.mu.Unlock()
-		s.wg.Wait()
-		s.mu.Lock()
-		if !s.running {
-			return
-		}
+	// Send the new activity, or drop if another activity filled the channel at the same time
+	select {
+	case s.activityCh <- activity:
+	default:
 	}
-	var ctx context.Context
-	ctx, s.cancel = context.WithCancel(context.Background())
-	s.wg.Go(func() {
-		s.handlePlexActivity(ctx, activity)
-	})
 }
 
 func (s *Service) handlePlexActivity(ctx context.Context, activity *plex.Activity) {
 	activityJson, _ := json.Marshal(activity)
 	logger.Info("Activity: %s", activityJson)
-	var rule config.DisplayRule
-	var stateChangedAtMs int64
-	if ok := func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.lastState != activity.State {
-			stateChangedAtMs = time.Now().UnixMilli()
-		} else {
-			stateChangedAtMs = s.stateChangedAtMs
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state != activity.State {
+		s.stateChangedAtMs = time.Now().UnixMilli()
+	}
+	if activity.State == "stopped" {
+		if s.state == "" || s.state == "stopped" {
+			// Stopped without a previous state or timer already set, ignore
+			return
 		}
-		if activity.State == "stopped" {
-			if s.lastState == "" || s.lastState == "stopped" {
-				// Stopped without a previous state or timer already set, ignore
-				return false
-			}
-			s.lastState = "stopped"
-			s.clearStopTimer()
-			s.setStopTimer(s.stopTimeout)
-			return false
-		}
-		switch activity.MediaType {
-		case "movie":
-			rule = s.displayRules.Movie
-		case "episode":
-			rule = s.displayRules.Episode
-		case "track":
-			rule = s.displayRules.Track
-		case "clip":
-			rule = s.displayRules.Clip
-		case "liveEpisode":
-			rule = s.displayRules.LiveEpisode
-		default:
-			logger.Error(nil, "Invalid media type %q", activity.MediaType)
-			return false
-		}
-		if activity.State == "paused" && rule.PauseTimeoutSeconds >= 0 {
-			if s.lastState == "" {
-				// Paused without a previous state, with pause timeout set, ignore
-				return false
-			}
-			if rule.PauseTimeoutSeconds == 0 {
-				// Paused, with pause timeout set to 0, stop immediately
-				s.stopActivity()
-				return false
-			}
-		}
-		// Playing, or transitioned to paused, or pause timeout set to -1, so clear idle timer
-		if activity.State != "paused" || s.lastState != "paused" || rule.PauseTimeoutSeconds < 0 {
-			s.clearStopTimer()
-		}
-		return true
-	}(); !ok {
+		s.state = "stopped"
+		s.clearStopTimer()
+		s.setStopTimer(s.stopTimeout)
 		return
+	}
+	var rule config.DisplayRule
+	switch activity.MediaType {
+	case "movie":
+		rule = s.displayRules.Movie
+	case "episode":
+		rule = s.displayRules.Episode
+	case "track":
+		rule = s.displayRules.Track
+	case "clip":
+		rule = s.displayRules.Clip
+	case "liveEpisode":
+		rule = s.displayRules.LiveEpisode
+	default:
+		logger.Error(nil, "Invalid media type %q", activity.MediaType)
+		return
+	}
+	if activity.State == "paused" && rule.PauseTimeoutSeconds >= 0 {
+		if s.state == "" {
+			// Paused without a previous state, with pause timeout set, ignore
+			return
+		}
+		if rule.PauseTimeoutSeconds == 0 {
+			// Paused, with pause timeout set to 0, stop immediately
+			s.stopActivity()
+			return
+		}
+	}
+	// Playing, or transitioned to paused, or pause timeout set to -1, so clear idle timer
+	if activity.State == "playing" || s.state != "paused" || rule.PauseTimeoutSeconds < 0 {
+		s.clearStopTimer()
 	}
 	templateData := buildTemplateData(activity)
 	logger.Debug("Template: %#v", templateData)
@@ -279,7 +290,7 @@ func (s *Service) handlePlexActivity(ctx context.Context, activity *plex.Activit
 	}
 	if progressMode != "off" {
 		if progressMode == "state" {
-			discordActivity.Timestamps.StartMs = stateChangedAtMs
+			discordActivity.Timestamps.StartMs = s.stateChangedAtMs
 		} else {
 			now := time.Now().UnixMilli()
 			if progressMode == "bar" || progressMode == "elapsed" {
@@ -304,15 +315,12 @@ func (s *Service) handlePlexActivity(ctx context.Context, activity *plex.Activit
 	if err := s.discordService.SetActivity(discordActivity); err != nil {
 		logger.Error(err, "Failed to set Discord activity")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if activity.State == "paused" && rule.PauseTimeoutSeconds > 0 {
 		s.setStopTimer(time.Duration(rule.PauseTimeoutSeconds) * time.Second)
 	} else {
 		s.setStopTimer(s.idleTimeout)
 	}
-	s.lastState = activity.State
-	s.stateChangedAtMs = stateChangedAtMs
+	s.state = activity.State
 }
 
 func activityText(text string, maxLength int) string {

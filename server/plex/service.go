@@ -150,8 +150,6 @@ func (s *Service) run(ctx context.Context, callback func(activity *Activity)) er
 		serverUrls = append(serverUrls, s.serverConfig.Url)
 	}
 
-	activityCh := make(chan *Activity, 1)
-
 	itemCache := make(map[string]*Metadata)
 	getItem := func(ratingKey string, itemType string) *Metadata {
 		if ratingKey == "" {
@@ -273,12 +271,7 @@ func (s *Service) run(ctx context.Context, callback func(activity *Activity)) er
 		if grandparentItem != nil {
 			activity.GrandparentItem = *grandparentItem
 		}
-		// Drain any stale pending activity
-		select {
-		case <-activityCh:
-		default:
-		}
-		activityCh <- activity
+		callback(activity)
 
 	}
 
@@ -307,17 +300,6 @@ func (s *Service) run(ctx context.Context, callback func(activity *Activity)) er
 		return fmt.Errorf("start notification listener: %w", errors.Join(errs...))
 	}
 	s.logger.Info("Connected to server")
-
-	wg.Go(func() {
-		for {
-			select {
-			case <-localCtx.Done():
-				return
-			case activity := <-activityCh:
-				callback(activity)
-			}
-		}
-	})
 
 	wg.Go(func() {
 		connChecker := time.NewTicker(connCheckInterval)
