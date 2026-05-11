@@ -29,9 +29,7 @@ type Service struct {
 	cacheService   *cache.Service
 	imageService   ImageService
 	imagesConfig   config.Images
-	displayRules   config.DisplayRules
-	stopTimeout    time.Duration
-	idleTimeout    time.Duration
+	discordConfig  config.Discord
 
 	stateMu          sync.Mutex
 	state            string
@@ -58,9 +56,7 @@ func NewService(
 		cacheService:   cacheService,
 		imageService:   imageService,
 		imagesConfig:   imagesConfig,
-		displayRules:   discordConfig.DisplayRules,
-		stopTimeout:    time.Duration(discordConfig.StopTimeoutSeconds) * time.Second,
-		idleTimeout:    time.Duration(discordConfig.IdleTimeoutSeconds) * time.Second,
+		discordConfig:  discordConfig,
 	}
 }
 
@@ -187,21 +183,21 @@ func (s *Service) handlePlexActivity(ctx context.Context, activity *plex.Activit
 		}
 		s.state = "stopped"
 		s.clearStopTimer()
-		s.setStopTimer(s.stopTimeout)
+		s.setStopTimer(time.Duration(s.discordConfig.StopTimeoutSeconds) * time.Second)
 		return
 	}
 	var rule config.DisplayRule
 	switch activity.MediaType {
 	case "movie":
-		rule = s.displayRules.Movie
+		rule = s.discordConfig.DisplayRules.Movie
 	case "episode":
-		rule = s.displayRules.Episode
+		rule = s.discordConfig.DisplayRules.Episode
 	case "track":
-		rule = s.displayRules.Track
+		rule = s.discordConfig.DisplayRules.Track
 	case "clip":
-		rule = s.displayRules.Clip
+		rule = s.discordConfig.DisplayRules.Clip
 	case "liveEpisode":
-		rule = s.displayRules.LiveEpisode
+		rule = s.discordConfig.DisplayRules.LiveEpisode
 	default:
 		logger.Error(nil, "Invalid media type %q", activity.MediaType)
 		return
@@ -318,7 +314,7 @@ func (s *Service) handlePlexActivity(ctx context.Context, activity *plex.Activit
 	if activity.State == "paused" && rule.PauseTimeoutSeconds > 0 {
 		s.setStopTimer(time.Duration(rule.PauseTimeoutSeconds) * time.Second)
 	} else {
-		s.setStopTimer(s.idleTimeout)
+		s.setStopTimer(time.Duration(s.discordConfig.IdleTimeoutSeconds) * time.Second)
 	}
 	s.state = activity.State
 }
