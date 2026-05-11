@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"drpp/server/api"
 	"drpp/server/cache"
@@ -15,7 +14,6 @@ import (
 	"drpp/server/mediator"
 	"drpp/server/plex"
 	"drpp/web"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -133,26 +132,26 @@ func main() {
 	}
 	setup(cfg, true)
 
-	// Allow at most one reload to be queued at a time
-	reloadCh := make(chan struct{}, 1)
 	var mu sync.Mutex
-	lastWebConfig, _ := json.Marshal(cfg.Web)
+	lastWebConfig := cfg.Web
 	reload := func() {
 		logger.Info("Reloading application due to config change")
 		mu.Lock()
 		defer mu.Unlock()
 		mediatorService.Stop()
 		cfg := configService.Config()
-		webConfig, _ := json.Marshal(cfg.Web)
-		setupServer := !bytes.Equal(webConfig, lastWebConfig) // TODO: This is a bit hacky
+		setupServer := !reflect.DeepEqual(cfg.Web, lastWebConfig)
 		if server != nil && setupServer {
 			if err := server.Stop(); err != nil {
 				logger.Error(err, "Failed to gracefully stop HTTP server")
 			}
 		}
-		lastWebConfig = webConfig
+		lastWebConfig = cfg.Web
 		setup(cfg, setupServer)
 	}
+
+	// Allow at most one reload to be queued at a time
+	reloadCh := make(chan struct{}, 1)
 	go func() {
 		for range reloadCh {
 			reload()
