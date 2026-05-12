@@ -1,4 +1,4 @@
-APP_VERSION := 3.3.1
+APP_VERSION := 3.4.0
 
 export GOEXPERIMENT := jsonv2
 

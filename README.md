@@ -161,7 +161,7 @@ DRPP's container image is Linux-based. Docker uses virtualisation to run Linux c
 
 ### Image Upload Providers
 
-DRPP downloads poster images from Plex and uploads them to an external image host for displaying in Discord. The following providers are available:
+DRPP downloads poster images from your Plex server and uploads them to an external image host to enable Discord to fetch and serve those images. The following image upload providers are available:
 
 - [Litterbox](https://litterbox.catbox.moe/) (default)
 - [ImgBB](https://imgbb.com/)
