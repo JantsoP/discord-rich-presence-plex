@@ -212,11 +212,11 @@ func launchUrl(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", url)
+		cmd = exec.Command("explorer", url) //nolint:gosec
 	case "linux":
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", url) //nolint:gosec
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", url) //nolint:gosec
 	default:
 		logger.Error(nil, "Unsupported OS %q for launching URL", runtime.GOOS)
 		return

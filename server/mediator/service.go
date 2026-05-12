@@ -101,7 +101,7 @@ func (s *Service) Start() {
 				default:
 				}
 				handlerWg.Add(1)
-				handlerCtx, cancelHandler = context.WithCancel(ctx)
+				handlerCtx, cancelHandler = context.WithCancel(ctx) //nolint:fatcontext
 				go func(handlerCtx context.Context, cancelHandler context.CancelFunc) {
 					s.handlePlexActivity(handlerCtx, activity)
 					cancelHandler()
