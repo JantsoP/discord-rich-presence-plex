@@ -119,25 +119,34 @@ To run Discord in a container as well, mount a shared directory from the host in
 
 <summary>Example</summary>
 
-**Docker Compose example using [kasmweb/discord](https://hub.docker.com/r/kasmweb/discord)**
+This repository includes a ready-made Docker image for running Discord in a container with a lightweight desktop and browser-accessible VNC. It is located in the [`docker/discord`](docker/discord) directory.
+
+**Build the image once:**
+
+```bash
+docker build -t discord-vnc ./docker/discord
+```
+
+The image installs Discord from the official `.deb` at build time. Rebuild whenever you want a newer Discord version.
+
+**Docker Compose example:**
 
 ```yaml
 services:
-  kasmweb-discord:
-    container_name: kasmweb-discord
-    image: kasmweb/discord:1.14.0
+  discord:
+    container_name: discord
+    build: ./docker/discord
+    # Or use the pre-built image after running the build command above:
+    # image: discord-vnc
     restart: unless-stopped
     ports:
-      - 127.0.0.1:6901:6901
+      - 127.0.0.1:6080:6080   # noVNC web UI — open http://localhost:6080/vnc.html
     shm_size: 512m
     environment:
-      VNC_PW: password
-      XDG_RUNTIME_DIR: /run/user/1000
+      VNC_PW: password          # Password for the VNC session
     volumes:
-      - ./discord:/home/kasm-user/.config/discord
-      - ./runtime:/run/user/1000
-    user: 0:0
-    entrypoint: sh -c "chown -R kasm-user:kasm-user /home/kasm-user && chmod 700 /run/user/1000 && chown -R kasm-user:kasm-user /run/user/1000 && su kasm-user -c '/dockerstartup/kasm_default_profile.sh /dockerstartup/vnc_startup.sh /dockerstartup/kasm_startup.sh'"
+      - ./discord-config:/home/discord/.config/discord   # Persist login / settings
+      - ./runtime:/run/user/1000                         # Shared IPC socket directory
   drpp:
     container_name: drpp
     image: ghcr.io/phin05/discord-rich-presence-plex:latest
@@ -146,10 +155,17 @@ services:
       - 127.0.0.1:8040:8040
     volumes:
       - ./data:/app/data
-      - ./runtime:/run/app:ro
+      - ./runtime:/run/app:ro   # Same directory, read-only — drpp reads the IPC socket here
     depends_on:
-      - kasmweb-discord
+      - discord
 ```
+
+**First-time setup:**
+
+1. Start the stack: `docker compose up -d`
+2. Open `http://localhost:6080/vnc.html` in your browser and log into Discord.
+3. In Discord, go to **Settings → Activity Settings → Activity Privacy** and enable **"Share my activity"**.
+4. Discord's login and settings are persisted in `./discord-config`, so you only need to do this once.
 
 </details>
 

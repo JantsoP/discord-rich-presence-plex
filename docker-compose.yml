@@ -1,0 +1,28 @@
+services:
+  discord:
+    container_name: discord
+    build: ./docker/discord
+    restart: unless-stopped
+    ports:
+      - "6080:6080"   # noVNC — open http://<host-ip>:6080/vnc.html from any LAN device
+    shm_size: 512m
+    environment:
+      VNC_PW: password
+    volumes:
+      - ./discord-config:/home/discord/.config/discord
+      - ./runtime:/run/user/1000
+
+  drpp:
+    container_name: drpp
+    image: ghcr.io/phin05/discord-rich-presence-plex:latest
+    restart: unless-stopped
+    ports:
+      - "8040:8040"   # DRPP web UI — http://<host-ip>:8040
+    environment:
+      DRPP_UID: 1000
+      DRPP_GID: 1000
+    volumes:
+      - ./data:/app/data
+      - ./runtime:/run/app:ro
+    depends_on:
+      - discord
